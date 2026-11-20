@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spa</title>
+<style>
+  :root { color-scheme: light dark; --bg:#f4f6f8; --card:#fff; --fg:#1a2530; --mut:#6b7885; --acc:#0a7cff; --on:#14a05a; --line:#dde3e8; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#12181e; --card:#1b242d; --fg:#e8eef3; --mut:#8a98a5; --line:#2a3642; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+  main { max-width:520px; margin:0 auto; padding:16px; display:grid; gap:12px; }
+  h1 { font-size:18px; margin:8px 0 0; font-weight:600; }
+  .head { display:flex; align-items:center; justify-content:space-between; }
+  .hbtns { display:flex; gap:6px; }
+  .langbtn { padding:4px 10px; font-size:13px; font-weight:600; color:var(--mut); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+  .card h2 { margin:0 0 10px; font-size:13px; font-weight:600; color:var(--mut); text-transform:uppercase; letter-spacing:.04em; }
+  .temp { display:flex; align-items:baseline; gap:10px; }
+  .temp .big { font-size:48px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .temp .sub { color:var(--mut); }
+  .row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 0; }
+  .row + .row { border-top:1px solid var(--line); }
+  .seg { display:flex; gap:6px; flex-wrap:wrap; }
+  button { font:inherit; border:1px solid var(--line); background:transparent; color:var(--fg); padding:7px 14px; border-radius:8px; cursor:pointer; }
+  button.on { background:var(--acc); border-color:var(--acc); color:#fff; }
+  button:disabled { opacity:.5; }
+  .stepper { display:flex; align-items:center; gap:10px; margin-top:8px; }
+  .stepper button { width:44px; height:44px; font-size:22px; padding:0; }
+  .stepper span { min-width:70px; text-align:center; font-variant-numeric:tabular-nums; }
+  .tabs { display:flex; gap:6px; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:4px; }
+  .tabs button { flex:1; border:0; padding:10px; border-radius:8px; color:var(--mut); font-weight:600; }
+  .tabs button.on { background:var(--acc); color:#fff; }
+  .stack { display:grid; gap:12px; }
+  .warn { color:#d98200; font-weight:600; }
+  .late { color:#d33; font-weight:600; }
+  .alert { background:#fdecea; color:#a02020; border:1px solid #f3b9b3; border-radius:12px; padding:12px 16px; }
+  @media (prefers-color-scheme: dark) { .alert { background:#3a1f1f; color:#ffb4ab; border-color:#6b2f2f; } }
+  #status { font-size:13px; color:var(--mut); }
+  #status.err { color:#d33; }
+</style>
+</head>
+<body>
+<main>
+  <div class="head"><h1 id="title">Spa</h1><div class="hbtns"><button id="unit" class="langbtn" aria-label="°C / °F"></button><button id="lang" class="langbtn" aria-label="Langue / Language"></button></div></div>
+  <div id="status"></div>
+  <div id="content"></div>
+</main>
+<script>
+// ---- Langue (FR par défaut, choix mémorisé dans le navigateur) ----
+const I18N = {
+  fr: {
+    connecting:'Connexion…', connected:'Connecté', notConnected:'Spa non connecté', unreachable:'Serveur injoignable',
+    control:'Contrôle', maintenance:'Entretien', temperature:'Température', setpoint:'consigne',
+    pumps:'Pompes', lights:'Lumières', watercare:'Watercare', alerts:'Alertes du spa',
+    noReminders:"Aucun rappel d'entretien disponible pour ce spa.",
+    overdue:n=>`en retard de ${n} j`, today:"aujourd'hui", inDays:n=>`dans ${n} j`,
+  },
+  en: {
+    connecting:'Connecting…', connected:'Connected', notConnected:'Spa not connected', unreachable:'Server unreachable',
+    control:'Control', maintenance:'Maintenance', temperature:'Temperature', setpoint:'setpoint',
+    pumps:'Pumps', lights:'Lights', watercare:'Watercare', alerts:'Spa alerts',
+    noReminders:'No maintenance reminders available for this spa.',
+    overdue:n=>`overdue by ${n} d`, today:'today', inDays:n=>`in ${n} d`,
+  },
+};
+// Valeurs fournies par geckolib (en anglais): traduites seulement en français.
+const FR_VALUES = {
+  operation:{Heating:'Chauffage', Cooling:'Refroidissement', Idle:'Au repos'},
+  mode:{OFF:'Arrêt', ON:'Marche', LO:'Bas', HI:'Haut'},
+  watercare:{'Away From Home':'Absent de la maison', Standard:'Standard', 'Energy Saving':"Économie d'énergie",
+             'Super Energy Saving':"Économie d'énergie max", Weekender:'Fin de semaine'},
+};
+const REMINDERS = {
+  fr:{RINSE_FILTER:'Rincer le filtre', CLEAN_FILTER:'Nettoyer le filtre', CHANGE_WATER:"Changer l'eau",
+      CHECK_SPA:'Vérifier le spa', CHANGE_OZONATOR:"Changer l'ozonateur", CHANGE_VISION_CARTRIDGE:'Changer la cartouche Vision'},
+  en:{RINSE_FILTER:'Rinse filter', CLEAN_FILTER:'Clean filter', CHANGE_WATER:'Change water',
+      CHECK_SPA:'Check spa', CHANGE_OZONATOR:'Change ozonator', CHANGE_VISION_CARTRIDGE:'Change Vision cartridge'},
+};
+
+let lang = 'fr';
+try { const saved = localStorage.getItem('spaweb-lang'); if (saved === 'fr' || saved === 'en') lang = saved; } catch (e) {}
+const urlLang = new URLSearchParams(location.search).get('lang');  // ?lang=en force la langue
+if (urlLang === 'fr' || urlLang === 'en') lang = urlLang;
+const t = k => I18N[lang][k];
+const fr = (group, v) => (lang === 'fr' && FR_VALUES[group][v]) || v;
+function deviceName(n) {
+  if (lang !== 'fr') return n;
+  return n.replace(/^Pump (\d+)$/, 'Pompe $1').replace(/^Blower$/, 'Souffleur').replace(/^Light( \d+)?$/, 'Lumière$1');
+}
+function setLang(l) {
+  lang = l;
+  try { localStorage.setItem('spaweb-lang', l); } catch (e) {}
+  applyLang(); render(); setStatusFromState();
+}
+function applyLang() {
+  document.documentElement.lang = lang;
+  document.getElementById('lang').textContent = lang === 'fr' ? 'EN' : 'FR';
+  document.title = 'Spa';
+}
+document.getElementById('lang').onclick = () => setLang(lang === 'fr' ? 'en' : 'fr');
+
+// ---- Application ----
+let S = null, busy = false;
+
+// ---- Unité de température (affichage seulement; le spa garde sa propre unité) ----
+let unitPref = null;  // null = suivre l'unité du spa
+try { const u = localStorage.getItem('spaweb-unit'); if (u === 'C' || u === 'F') unitPref = u; } catch (e) {}
+const urlUnit = new URLSearchParams(location.search).get('unit');  // ?unit=F force l'unité
+if (urlUnit === 'C' || urlUnit === 'F') unitPref = urlUnit;
+const spaUnit = () => (S && S.temperature && S.temperature.unit.includes('F')) ? 'F' : 'C';
+const dispUnit = () => unitPref || spaUnit();
+function toDisp(v) { const s = spaUnit(), d = dispUnit(); return s === d ? v : (s === 'F' ? (v - 32) * 5 / 9 : v * 9 / 5 + 32); }
+function fromDisp(v) { const s = spaUnit(), d = dispUnit(); return s === d ? v : (d === 'F' ? (v - 32) * 5 / 9 : v * 9 / 5 + 32); }
+const r1 = v => Math.round(v * 10) / 10;
+const fmtTemp = v => `${r1(toDisp(v))}°${dispUnit()}`;
+function applyUnit() { document.getElementById('unit').textContent = dispUnit() === 'C' ? '°F' : '°C'; }
+document.getElementById('unit').onclick = () => {
+  unitPref = dispUnit() === 'C' ? 'F' : 'C';
+  try { localStorage.setItem('spaweb-unit', unitPref); } catch (e) {}
+  applyUnit(); render();
+};
+
+async function api(path, data) {
+  const r = await fetch(path, data ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)} : {});
+  if (!r.ok) throw new Error(await r.text() || r.status);
+  return r.json();
+}
+
+function el(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'onclick') e.onclick = v; else if (k === 'class') e.className = v; else e[k] = v;
+  }
+  for (const k of kids) e.append(k);
+  return e;
+}
+
+async function act(path, data) {
+  busy = true;
+  try { await api(path, data); await new Promise(r => setTimeout(r, 400)); await refresh(); }
+  catch (e) { setStatus(e.message, true); }
+  busy = false;
+}
+
+function setStatus(text, err) { const s = document.getElementById('status'); s.textContent = text; s.className = err ? 'err' : ''; }
+function setStatusFromState() {
+  if (!S) return setStatus(t('connecting'));
+  setStatus(S.connected ? t('connected') : `${t('notConnected')} (${S.state})`, !S.connected);
+}
+
+// options = valeurs envoyées au serveur; label = texte affiché
+function segment(options, current, onpick, label = o => o) {
+  const d = el('div', {class:'seg'});
+  for (const o of options) d.append(el('button', {class: o === current ? 'on' : '', onclick: () => onpick(o)}, label(o)));
+  return d;
+}
+
+let tab = location.hash === '#entretien' ? 'maintenance' : 'control';  // /#entretien ouvre directement le 2e onglet
+
+function card(title, ...kids) { return el('div', {class:'card'}, el('h2', {}, title), ...kids); }
+
+function controlTab(c) {
+  const T = S.temperature;
+  const tc = card(t('temperature'));
+  tc.append(el('div', {class:'temp'},
+    el('span', {class:'big'}, fmtTemp(T.current)),
+    el('span', {class:'sub'}, `${t('setpoint')} ${fmtTemp(T.target)} · ${fr('operation', T.operation)}`)));
+  // Pas de 1° en °F, de 0,5° en °C; la valeur est reconvertie dans l'unité du spa avant l'envoi.
+  const step = dispUnit() === 'F' ? 1 : 0.5;
+  const set = dir => {
+    const cur = toDisp(T.target);
+    let next = (dispUnit() === 'F' ? Math.round(cur) : Math.round(cur * 2) / 2) + dir * step;
+    next = Math.min(toDisp(T.max), Math.max(toDisp(T.min), next));
+    act('/api/setpoint', {value: r1(fromDisp(next))});
+  };
+  tc.append(el('div', {class:'stepper'},
+    el('button', {onclick: () => set(-1)}, '−'),
+    el('span', {}, fmtTemp(T.target)),
+    el('button', {onclick: () => set(1)}, '+')));
+  c.append(tc);
+
+  const mode = m => fr('mode', m);
+  if (S.pumps.length || S.blowers.length) {
+    const pc = card(t('pumps'));
+    S.pumps.forEach((p, i) => pc.append(el('div', {class:'row'}, el('span', {}, deviceName(p.name)),
+      segment(p.modes, p.mode, m => act(`/api/pump/${i}`, {mode:m}), mode))));
+    S.blowers.forEach((b, i) => pc.append(el('div', {class:'row'}, el('span', {}, deviceName(b.name)),
+      segment(b.modes, b.mode, m => act(`/api/blower/${i}`, {mode:m}), mode))));
+    c.append(pc);
+  }
+  if (S.lights.length) {
+    const lc = card(t('lights'));
+    S.lights.forEach((l, i) => lc.append(el('div', {class:'row'}, el('span', {}, deviceName(l.name)),
+      segment(['OFF', 'ON'], l.on ? 'ON' : 'OFF', v => act(`/api/light/${i}`, {on: v === 'ON'}), mode))));
+    c.append(lc);
+  }
+  const w = S.watercare;
+  c.append(card(t('watercare'),
+    segment(w.modes, w.mode, m => act('/api/watercare', {mode:m}), m => fr('watercare', m))));
+}
+
+function maintenanceTab(c) {
+  if (!S.maintenance || !S.maintenance.length) {
+    c.append(card(t('maintenance'), t('noReminders')));
+    return;
+  }
+  const mc = card(t('maintenance'));
+  for (const m of S.maintenance) {
+    let txt, cls = '';
+    if (m.days < 0) { txt = t('overdue')(-m.days); cls = 'late'; }
+    else if (m.days === 0) { txt = t('today'); cls = 'late'; }
+    else { txt = t('inDays')(m.days); if (m.days <= 7) cls = 'warn'; }
+    const label = REMINDERS[lang][m.type] || m.label;
+    mc.append(el('div', {class:'row'}, el('span', {}, label), el('span', {class:cls}, txt)));
+  }
+  c.append(mc);
+}
+
+function render() {
+  const root = document.getElementById('content');
+  root.replaceChildren();
+  if (!S || !S.connected) return;
+  document.getElementById('title').textContent = S.name || 'Spa';
+
+  const tabs = el('div', {class:'tabs'},
+    el('button', {class: tab === 'control' ? 'on' : '', onclick: () => { tab = 'control'; history.replaceState(null, '', '#'); render(); }}, t('control')),
+    el('button', {class: tab === 'maintenance' ? 'on' : '', onclick: () => { tab = 'maintenance'; history.replaceState(null, '', '#entretien'); render(); }}, t('maintenance')));
+  const c = el('div', {class:'stack'});
+  if (S.alerts && S.alerts.length)
+    c.append(el('div', {class:'alert'}, `${t('alerts')} : ${S.alerts.join(', ')}`));
+  (tab === 'control' ? controlTab : maintenanceTab)(c);
+  root.append(tabs, el('div', {style:'height:12px'}), c);
+}
+
+async function refresh() {
+  try {
+    S = await api('/api/state');
+    applyUnit();
+    setStatusFromState();
+    render();
+  } catch (e) { setStatus(t('unreachable'), true); }
+}
+applyLang();
+setStatusFromState();
+refresh();
+setInterval(() => { if (!busy) refresh(); }, 5000);
+</script>
+</body>
+</html>

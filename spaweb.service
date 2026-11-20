@@ -1,0 +1,15 @@
+[Unit]
+Description=Spa web (in.touch 2 via geckolib)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/spaweb
+EnvironmentFile=/home/pi/spaweb/spaweb.env
+ExecStart=/home/pi/spaweb/venv/bin/python server.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
